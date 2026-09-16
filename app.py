@@ -1,299 +1,1077 @@
+from io import BytesIO
 import html
-import streamlit as st
+import re
+import unicodedata
 
-# Configuración general de la página
+import streamlit as st
+from docx import Document
+from docx.enum.table import WD_CELL_VERTICAL_ALIGNMENT
+from docx.enum.text import WD_ALIGN_PARAGRAPH
+from docx.shared import Inches, Pt, RGBColor
+
+
+# ============================================================
+# CONFIGURACIÓN GENERAL
+# ============================================================
+
 st.set_page_config(
     page_title="Asistente de Caracterización de Procesos",
-    page_icon="🧭",
+    page_icon="📘",
     layout="wide",
 )
 
-# Estilos sencillos para dar una apariencia limpia y profesional
+
+# Los once campos tienen inicialmente el mismo peso.
+CAMPOS = {
+    "nombre_proceso": "Nombre del proceso",
+    "objetivo_proceso": "Objetivo del proceso",
+    "responsable_proceso": "Responsable del proceso",
+    "proveedor": "Proveedor",
+    "entrada": "Entrada",
+    "actividades_principales": "Actividades principales",
+    "salida": "Salida",
+    "cliente_usuario": "Cliente o usuario",
+    "criterio_aceptacion": "Criterio de aceptación de la salida",
+    "indicador_proceso": "Indicador del proceso",
+    "riesgos_observaciones": "Riesgos u observaciones",
+}
+
+
+# ============================================================
+# ESTILOS VISUALES
+# ============================================================
+
 st.markdown(
     """
     <style>
-        .stApp { background-color: #f5f7fa; }
-        .block-container { max-width: 1180px; padding-top: 2rem; padding-bottom: 3rem; }
-        h1, h2, h3 { color: #16324f; }
-        .subtitle { color: #51606f; font-size: 1.08rem; margin-top: -0.7rem; margin-bottom: 1.5rem; }
-        .section-card {
-            background: white;
-            border: 1px solid #dce3ea;
-            border-radius: 14px;
-            padding: 1.1rem 1.2rem;
-            box-shadow: 0 2px 8px rgba(22, 50, 79, 0.06);
-            margin-bottom: 1rem;
+        .stApp {
+            background-color: #f5f7fa;
         }
-        .traffic {
-            border-radius: 12px;
-            padding: 1rem 1.2rem;
+
+        .block-container {
+            max-width: 1200px;
+            padding-top: 2rem;
+            padding-bottom: 3rem;
+        }
+
+        .hero {
+            background: linear-gradient(135deg, #0b3d70 0%, #155a96 100%);
             color: white;
-            font-size: 1.05rem;
-            font-weight: 700;
-            margin: 0.5rem 0 1rem 0;
+            padding: 1.6rem 1.8rem;
+            border-radius: 16px;
+            margin-bottom: 1.2rem;
+            box-shadow: 0 8px 24px rgba(11, 61, 112, 0.16);
         }
-        .green { background: #218838; }
-        .yellow { background: #d39e00; }
-        .red { background: #c82333; }
+
+        .hero h1 {
+            margin: 0;
+            color: white;
+            font-size: clamp(1.8rem, 4vw, 2.7rem);
+        }
+
+        .hero p {
+            margin: 0.55rem 0 0 0;
+            color: #eaf3fb;
+            font-size: 1.05rem;
+        }
+
+        .section-title {
+            color: #0b3d70;
+            font-size: 1.35rem;
+            font-weight: 700;
+            margin-top: 1.2rem;
+            margin-bottom: 0.65rem;
+        }
+
+        .status-card {
+            padding: 1rem 1.2rem;
+            border-radius: 12px;
+            color: white;
+            font-weight: 700;
+            font-size: 1.05rem;
+            margin: 0.8rem 0 1rem 0;
+        }
+
         .sipoc-card {
             background: white;
-            border: 1px solid #d7e0e8;
-            border-top: 5px solid #2f6f9f;
+            border: 1px solid #dbe3eb;
+            border-top: 5px solid #155a96;
             border-radius: 12px;
-            padding: 0.9rem;
-            min-height: 170px;
-            box-shadow: 0 2px 7px rgba(22, 50, 79, 0.06);
+            padding: 1rem;
+            min-height: 190px;
+            box-shadow: 0 4px 14px rgba(26, 54, 80, 0.07);
             overflow-wrap: anywhere;
         }
+
         .sipoc-title {
-            color: #2f6f9f;
-            font-size: 0.78rem;
+            color: #0b3d70;
             font-weight: 800;
+            font-size: 0.88rem;
             letter-spacing: 0.04rem;
-            margin-bottom: 0.55rem;
+            margin-bottom: 0.6rem;
         }
-        .arrow { text-align: center; color: #2f6f9f; font-size: 1.6rem; font-weight: 800; padding-top: 3.3rem; }
-        .field-label { color: #2f6f9f; font-weight: 700; margin-bottom: 0.2rem; }
-        .field-value { color: #293845; white-space: pre-wrap; overflow-wrap: anywhere; }
-        div.stButton > button, div.stFormSubmitButton > button {
-            border-radius: 9px;
-            min-height: 3rem;
+
+        .sipoc-content {
+            color: #263746;
+            font-size: 0.95rem;
+            line-height: 1.45;
+        }
+
+        .sipoc-arrow {
+            text-align: center;
+            color: #155a96;
+            font-size: 1.4rem;
             font-weight: 700;
+            margin-top: 0.3rem;
         }
-        div.stFormSubmitButton > button {
-            background: #1d5f91;
+
+        .detail-card {
+            background: white;
+            border: 1px solid #dbe3eb;
+            border-radius: 12px;
+            padding: 1rem 1.1rem;
+            min-height: 135px;
+            margin-bottom: 0.8rem;
+            overflow-wrap: anywhere;
+        }
+
+        .detail-label {
+            color: #0b3d70;
+            font-weight: 750;
+            font-size: 0.9rem;
+            margin-bottom: 0.45rem;
+        }
+
+        .detail-value {
+            color: #263746;
+            line-height: 1.5;
+        }
+
+        div.stButton > button,
+        div.stDownloadButton > button {
+            border-radius: 10px;
+            font-weight: 700;
+            min-height: 3rem;
+        }
+
+        div.stDownloadButton > button {
+            background: #0b3d70;
             color: white;
-            border: none;
+            border: 1px solid #0b3d70;
+        }
+
+        div.stDownloadButton > button:hover {
+            background: #155a96;
+            color: white;
+            border-color: #155a96;
+        }
+
+        @media (max-width: 700px) {
+            .block-container {
+                padding-left: 1rem;
+                padding-right: 1rem;
+            }
+
+            .sipoc-card {
+                min-height: auto;
+            }
         }
     </style>
     """,
     unsafe_allow_html=True,
 )
 
-# Campos del formulario y sus nombres visibles
-FIELDS = {
-    "nombre_proceso": "Nombre del proceso",
-    "objetivo": "Objetivo del proceso",
-    "responsable": "Responsable del proceso",
-    "proveedor": "Proveedor",
-    "entrada": "Entrada",
-    "actividades": "Actividades principales",
-    "salida": "Salida",
-    "cliente": "Cliente o usuario",
-    "criterio": "Criterio de aceptación de la salida",
-    "indicador": "Indicador del proceso",
-    "riesgos": "Riesgos u observaciones",
-}
+
+# ============================================================
+# FUNCIONES DE ESTADO Y VALIDACIÓN
+# ============================================================
+
+def inicializar_estado():
+    """
+    Crea las variables necesarias para conservar el formulario
+    y el último análisis durante la sesión.
+    """
+    for clave in CAMPOS:
+        if clave not in st.session_state:
+            st.session_state[clave] = ""
+
+    if "ultimo_analisis" not in st.session_state:
+        st.session_state.ultimo_analisis = None
+
+    if "mensaje_validacion" not in st.session_state:
+        st.session_state.mensaje_validacion = ""
 
 
-def safe_text(value):
-    """Protege el texto antes de mostrarlo en bloques HTML."""
-    text = str(value).strip() if value else ""
-    return html.escape(text).replace("\n", "<br>") if text else "No diligenciado"
+def limpiar_formulario():
+    """
+    Limpia todos los campos y elimina el último análisis.
+    Esta función se ejecuta antes de que Streamlit vuelva
+    a dibujar la página.
+    """
+    for clave in CAMPOS:
+        st.session_state[clave] = ""
+
+    st.session_state.ultimo_analisis = None
+    st.session_state.mensaje_validacion = ""
 
 
-def clear_form():
-    """Elimina los datos del formulario y el análisis guardado."""
-    for key in list(FIELDS) + ["analysis_result"]:
-        st.session_state.pop(key, None)
+def texto_diligenciado(valor):
+    """
+    Verifica si un campo contiene texto diferente de espacios.
+    """
+    return bool(str(valor).strip())
 
 
-def show_field(label, value):
-    """Muestra un campo de la ficha de forma uniforme."""
+def calcular_completitud(datos):
+    """
+    Calcula el porcentaje según la cantidad de campos diligenciados.
+    Todos los campos tienen el mismo peso.
+    """
+    total_campos = len(CAMPOS)
+
+    campos_diligenciados = sum(
+        texto_diligenciado(datos[clave])
+        for clave in CAMPOS
+    )
+
+    porcentaje = round(
+        (campos_diligenciados / total_campos) * 100
+    )
+
+    campos_pendientes = [
+        etiqueta
+        for clave, etiqueta in CAMPOS.items()
+        if not texto_diligenciado(datos[clave])
+    ]
+
+    return porcentaje, campos_pendientes
+
+
+def determinar_semaforo(porcentaje):
+    """
+    Determina el estado, mensaje y color del semáforo.
+    """
+    if porcentaje >= 80:
+        return (
+            "VERDE",
+            "Caracterización completa.",
+            "#218739",
+        )
+
+    if porcentaje >= 50:
+        return (
+            "AMARILLO",
+            "Caracterización parcialmente completa.",
+            "#c28a00",
+        )
+
+    return (
+        "ROJO",
+        "Caracterización incompleta.",
+        "#b42318",
+    )
+
+
+def valor_visible(valor):
+    """
+    Devuelve 'No diligenciado' cuando el campo está vacío.
+    """
+    valor = str(valor).strip()
+    return valor if valor else "No diligenciado"
+
+
+def texto_html(valor):
+    """
+    Prepara el contenido para mostrarlo de forma segura
+    dentro de las tarjetas HTML.
+    """
+    contenido = html.escape(valor_visible(valor))
+    return contenido.replace("\n", "<br>")
+
+
+# ============================================================
+# FUNCIONES DE VISUALIZACIÓN
+# ============================================================
+
+def mostrar_tarjeta(etiqueta, valor):
+    """
+    Muestra un dato de la ficha dentro de una tarjeta.
+    """
+    etiqueta_segura = html.escape(etiqueta)
+    valor_seguro = texto_html(valor)
+
     st.markdown(
-        f'<div class="section-card"><div class="field-label">{html.escape(label)}</div>'
-        f'<div class="field-value">{safe_text(value)}</div></div>',
+        f"""
+        <div class="detail-card">
+            <div class="detail-label">{etiqueta_segura}</div>
+            <div class="detail-value">{valor_seguro}</div>
+        </div>
+        """,
         unsafe_allow_html=True,
     )
 
 
-# Encabezado
-st.title("Asistente de Caracterización de Procesos")
+def mostrar_sipoc(datos):
+    """
+    Construye una visualización SIPOC sencilla y adaptable.
+    """
+    nombre_proceso = texto_html(
+        datos["nombre_proceso"]
+    )
+
+    actividades = texto_html(
+        datos["actividades_principales"]
+    )
+
+    contenido_proceso = (
+        f"<strong>{nombre_proceso}</strong>"
+        f"<br><br>{actividades}"
+    )
+
+    elementos_sipoc = [
+        (
+            "PROVEEDOR",
+            texto_html(datos["proveedor"]),
+        ),
+        (
+            "ENTRADA",
+            texto_html(datos["entrada"]),
+        ),
+        (
+            "PROCESO",
+            contenido_proceso,
+        ),
+        (
+            "SALIDA",
+            texto_html(datos["salida"]),
+        ),
+        (
+            "CLIENTE",
+            texto_html(datos["cliente_usuario"]),
+        ),
+    ]
+
+    columnas = st.columns(5, gap="small")
+
+    for indice, ((titulo, contenido), columna) in enumerate(
+        zip(elementos_sipoc, columnas)
+    ):
+        with columna:
+            st.markdown(
+                f"""
+                <div class="sipoc-card">
+                    <div class="sipoc-title">{titulo}</div>
+                    <div class="sipoc-content">{contenido}</div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+
+            if indice < len(elementos_sipoc) - 1:
+                st.markdown(
+                    '<div class="sipoc-arrow">→</div>',
+                    unsafe_allow_html=True,
+                )
+
+
+# ============================================================
+# FUNCIONES PARA GENERAR EL DOCUMENTO WORD
+# ============================================================
+
+def aplicar_estilo_documento(documento):
+    """
+    Aplica márgenes, tipografía y colores al documento Word.
+    """
+    seccion = documento.sections[0]
+
+    seccion.top_margin = Inches(0.7)
+    seccion.bottom_margin = Inches(0.7)
+    seccion.left_margin = Inches(0.75)
+    seccion.right_margin = Inches(0.75)
+
+    estilo_normal = documento.styles["Normal"]
+    estilo_normal.font.name = "Aptos"
+    estilo_normal.font.size = Pt(10.5)
+
+    estilos_titulos = [
+        "Title",
+        "Heading 1",
+        "Heading 2",
+    ]
+
+    for nombre_estilo in estilos_titulos:
+        estilo = documento.styles[nombre_estilo]
+        estilo.font.name = "Aptos Display"
+        estilo.font.color.rgb = RGBColor(
+            11,
+            61,
+            112,
+        )
+
+
+def agregar_fila_informacion(tabla, etiqueta, valor):
+    """
+    Agrega una fila con etiqueta y contenido a una tabla Word.
+    """
+    celdas = tabla.add_row().cells
+
+    celdas[0].text = etiqueta
+    celdas[1].text = valor_visible(valor)
+
+    if celdas[0].paragraphs[0].runs:
+        celdas[0].paragraphs[0].runs[0].bold = True
+
+    for celda in celdas:
+        celda.vertical_alignment = (
+            WD_CELL_VERTICAL_ALIGNMENT.CENTER
+        )
+
+
+def generar_documento_word(analisis):
+    """
+    Genera el documento Word completamente en memoria.
+    Retorna el contenido del archivo como bytes.
+    """
+    datos = analisis["datos"]
+
+    documento = Document()
+    aplicar_estilo_documento(documento)
+
+    # Título principal
+    titulo = documento.add_heading(
+        "Ficha de Caracterización del Proceso",
+        level=0,
+    )
+    titulo.alignment = WD_ALIGN_PARAGRAPH.CENTER
+
+    # Información general
+    documento.add_heading(
+        "1. Información general",
+        level=1,
+    )
+
+    tabla_general = documento.add_table(
+        rows=0,
+        cols=2,
+    )
+    tabla_general.style = "Table Grid"
+
+    agregar_fila_informacion(
+        tabla_general,
+        "Nombre del proceso",
+        datos["nombre_proceso"],
+    )
+
+    agregar_fila_informacion(
+        tabla_general,
+        "Objetivo del proceso",
+        datos["objetivo_proceso"],
+    )
+
+    agregar_fila_informacion(
+        tabla_general,
+        "Responsable del proceso",
+        datos["responsable_proceso"],
+    )
+
+    # Tabla SIPOC
+    documento.add_paragraph()
+
+    documento.add_heading(
+        "2. Tabla SIPOC",
+        level=1,
+    )
+
+    tabla_sipoc = documento.add_table(
+        rows=1,
+        cols=5,
+    )
+    tabla_sipoc.style = "Table Grid"
+
+    encabezados_sipoc = [
+        "Proveedor",
+        "Entrada",
+        "Proceso",
+        "Salida",
+        "Cliente o usuario",
+    ]
+
+    for celda, encabezado in zip(
+        tabla_sipoc.rows[0].cells,
+        encabezados_sipoc,
+    ):
+        celda.text = encabezado
+
+        if celda.paragraphs[0].runs:
+            celda.paragraphs[0].runs[0].bold = True
+
+        celda.paragraphs[0].alignment = (
+            WD_ALIGN_PARAGRAPH.CENTER
+        )
+
+        celda.vertical_alignment = (
+            WD_CELL_VERTICAL_ALIGNMENT.CENTER
+        )
+
+    fila_sipoc = tabla_sipoc.add_row().cells
+
+    texto_proceso = (
+        f"Nombre del proceso:\n"
+        f"{valor_visible(datos['nombre_proceso'])}\n\n"
+        f"Actividades principales:\n"
+        f"{valor_visible(datos['actividades_principales'])}"
+    )
+
+    valores_sipoc = [
+        valor_visible(datos["proveedor"]),
+        valor_visible(datos["entrada"]),
+        texto_proceso,
+        valor_visible(datos["salida"]),
+        valor_visible(datos["cliente_usuario"]),
+    ]
+
+    for celda, valor in zip(
+        fila_sipoc,
+        valores_sipoc,
+    ):
+        celda.text = valor
+        celda.vertical_alignment = (
+            WD_CELL_VERTICAL_ALIGNMENT.CENTER
+        )
+
+    # Información complementaria
+    documento.add_paragraph()
+
+    documento.add_heading(
+        "3. Información complementaria",
+        level=1,
+    )
+
+    tabla_complementaria = documento.add_table(
+        rows=0,
+        cols=2,
+    )
+    tabla_complementaria.style = "Table Grid"
+
+    agregar_fila_informacion(
+        tabla_complementaria,
+        "Criterio de aceptación de la salida",
+        datos["criterio_aceptacion"],
+    )
+
+    agregar_fila_informacion(
+        tabla_complementaria,
+        "Indicador del proceso",
+        datos["indicador_proceso"],
+    )
+
+    agregar_fila_informacion(
+        tabla_complementaria,
+        "Riesgos u observaciones",
+        datos["riesgos_observaciones"],
+    )
+
+    # Resultado del análisis
+    documento.add_paragraph()
+
+    documento.add_heading(
+        "4. Resultado del análisis",
+        level=1,
+    )
+
+    parrafo_porcentaje = documento.add_paragraph()
+    etiqueta_porcentaje = parrafo_porcentaje.add_run(
+        "Porcentaje de completitud: "
+    )
+    etiqueta_porcentaje.bold = True
+
+    parrafo_porcentaje.add_run(
+        f"{analisis['porcentaje']} %"
+    )
+
+    parrafo_estado = documento.add_paragraph()
+    etiqueta_estado = parrafo_estado.add_run(
+        "Estado del semáforo: "
+    )
+    etiqueta_estado.bold = True
+
+    parrafo_estado.add_run(
+        f"{analisis['estado']} | "
+        f"{analisis['mensaje_estado']}"
+    )
+
+    documento.add_paragraph(
+        "El porcentaje refleja el nivel de diligenciamiento "
+        "de la ficha, pero no evalúa por sí solo la calidad "
+        "técnica de la información registrada."
+    )
+
+    documento.add_heading(
+        "Campos pendientes por diligenciar",
+        level=2,
+    )
+
+    if analisis["pendientes"]:
+        for campo in analisis["pendientes"]:
+            documento.add_paragraph(
+                campo,
+                style="List Bullet",
+            )
+    else:
+        documento.add_paragraph(
+            "Todos los campos fueron diligenciados."
+        )
+
+    # Creación del archivo en memoria
+    archivo_memoria = BytesIO()
+    documento.save(archivo_memoria)
+    archivo_memoria.seek(0)
+
+    return archivo_memoria.getvalue()
+
+
+def limpiar_nombre_archivo(nombre_proceso):
+    """
+    Genera un nombre de archivo seguro.
+
+    Elimina tildes, espacios, símbolos y caracteres
+    que podrían ocasionar problemas en el nombre del archivo.
+    """
+    nombre = str(nombre_proceso).strip()
+
+    if not nombre:
+        return "Caracterizacion_del_Proceso.docx"
+
+    # Eliminar tildes y otros signos diacríticos
+    nombre = unicodedata.normalize(
+        "NFKD",
+        nombre,
+    )
+
+    nombre = "".join(
+        caracter
+        for caracter in nombre
+        if not unicodedata.combining(caracter)
+    )
+
+    # Sustituir grupos de caracteres no permitidos
+    nombre = re.sub(
+        r"[^A-Za-z0-9_-]+",
+        "_",
+        nombre,
+    )
+
+    # Evitar varios guiones bajos seguidos
+    nombre = re.sub(
+        r"_+",
+        "_",
+        nombre,
+    )
+
+    nombre = nombre.strip("_.-")
+
+    if not nombre:
+        nombre = "del_Proceso"
+
+    # Limitar la longitud para evitar nombres excesivamente largos
+    nombre = nombre[:100]
+
+    return f"Caracterizacion_{nombre}.docx"
+
+
+# ============================================================
+# INICIO DE LA APLICACIÓN
+# ============================================================
+
+inicializar_estado()
+
 st.markdown(
-    '<p class="subtitle">Construya y revise de manera sencilla la caracterización de su proceso.</p>',
+    """
+    <div class="hero">
+        <h1>Asistente de Caracterización de Procesos</h1>
+        <p>
+            Construya, revise y descargue de manera sencilla
+            la caracterización de su proceso.
+        </p>
+    </div>
+    """,
     unsafe_allow_html=True,
 )
 
-# Formulario principal
-with st.form("process_form"):
-    st.subheader("1. Información del proceso")
+st.markdown(
+    '<div class="section-title">'
+    '1. Diligencie la información del proceso'
+    '</div>',
+    unsafe_allow_html=True,
+)
 
-    col1, col2 = st.columns(2)
-    with col1:
+st.caption(
+    "Complete los campos que conozca. Puede dejar campos "
+    "vacíos y volver a analizar más adelante."
+)
+
+
+# ============================================================
+# FORMULARIO
+# ============================================================
+
+with st.form("formulario_caracterizacion"):
+
+    columna_izquierda, columna_derecha = st.columns(
+        2,
+        gap="large",
+    )
+
+    with columna_izquierda:
+
         st.text_input(
-            "Nombre del proceso *",
+            "Nombre del proceso",
             key="nombre_proceso",
             placeholder="Ejemplo: Gestión de matrículas",
         )
+
+        st.text_area(
+            "Objetivo del proceso",
+            key="objetivo_proceso",
+            placeholder=(
+                "Ejemplo: Garantizar la matrícula oportuna "
+                "y correcta de los estudiantes."
+            ),
+            height=110,
+        )
+
         st.text_input(
             "Responsable del proceso",
-            key="responsable",
-            placeholder="Nombre, cargo o dependencia",
+            key="responsable_proceso",
+            placeholder=(
+                "Ejemplo: Dirección de Registro Académico"
+            ),
         )
+
         st.text_area(
             "Proveedor",
             key="proveedor",
-            placeholder="Quién suministra la entrada",
+            placeholder=(
+                "Ejemplo: Aspirante, Facultad, Tesorería"
+            ),
             height=100,
         )
+
         st.text_area(
             "Entrada",
             key="entrada",
-            placeholder="Información, solicitud o recurso recibido",
-            height=110,
-        )
-        st.text_area(
-            "Cliente o usuario",
-            key="cliente",
-            placeholder="Quién recibe o utiliza la salida",
-            height=100,
-        )
-        st.text_area(
-            "Indicador del proceso",
-            key="indicador",
-            placeholder="Ejemplo: porcentaje de matrículas procesadas a tiempo",
-            height=100,
-        )
-
-    with col2:
-        st.text_area(
-            "Objetivo del proceso",
-            key="objetivo",
-            placeholder="Inicie con un verbo e indique qué se busca lograr",
+            placeholder=(
+                "Ejemplo: Documentos de admisión, recibo "
+                "de pago y solicitud de matrícula"
+            ),
             height=120,
         )
+
         st.text_area(
             "Actividades principales",
-            key="actividades",
-            placeholder="Escriba una actividad por línea",
-            height=150,
+            key="actividades_principales",
+            placeholder=(
+                "Escriba una actividad por línea.\n"
+                "Ejemplo:\n"
+                "Validar documentos\n"
+                "Verificar pago\n"
+                "Registrar asignaturas"
+            ),
+            height=180,
         )
+
+    with columna_derecha:
+
         st.text_area(
             "Salida",
             key="salida",
-            placeholder="Producto, servicio, decisión o información generada",
+            placeholder=(
+                "Ejemplo: Estudiante matriculado y "
+                "horario generado"
+            ),
+            height=110,
+        )
+
+        st.text_area(
+            "Cliente o usuario",
+            key="cliente_usuario",
+            placeholder=(
+                "Ejemplo: Estudiantes, facultades y "
+                "dependencias académicas"
+            ),
             height=100,
         )
+
         st.text_area(
             "Criterio de aceptación de la salida",
-            key="criterio",
-            placeholder="Condición que debe cumplir la salida para ser aceptada",
+            key="criterio_aceptacion",
+            placeholder=(
+                "Ejemplo: Matrícula activa, datos completos "
+                "y horario confirmado"
+            ),
             height=110,
         )
+
+        st.text_area(
+            "Indicador del proceso",
+            key="indicador_proceso",
+            placeholder=(
+                "Ejemplo: Porcentaje de matrículas "
+                "completadas dentro del plazo"
+            ),
+            height=110,
+        )
+
         st.text_area(
             "Riesgos u observaciones",
-            key="riesgos",
-            placeholder="Riesgos, controles, aclaraciones o notas relevantes",
-            height=110,
+            key="riesgos_observaciones",
+            placeholder=(
+                "Ejemplo: Pagos no aplicados, documentos "
+                "incompletos o fallas de plataforma"
+            ),
+            height=150,
         )
 
-    analyzed = st.form_submit_button(
-        "🔎 Analizar proceso",
-        use_container_width=True,
+    boton_analizar = st.form_submit_button(
+        "Analizar proceso",
         type="primary",
+        use_container_width=True,
     )
 
-# Botón independiente para iniciar una nueva ficha
+
+# El botón se encuentra fuera del formulario para que pueda
+# ejecutar su función de limpieza de forma independiente.
 st.button(
-    "🧹 Limpiar formulario",
-    on_click=clear_form,
+    "Limpiar formulario",
+    on_click=limpiar_formulario,
     use_container_width=True,
 )
 
-# Procesamiento del formulario
-if analyzed:
-    current_data = {
-        key: str(st.session_state.get(key, "")).strip()
-        for key in FIELDS
+
+# ============================================================
+# EJECUCIÓN DEL ANÁLISIS
+# ============================================================
+
+if boton_analizar:
+
+    datos_actuales = {
+        clave: st.session_state.get(clave, "")
+        for clave in CAMPOS
     }
 
-    if not any(current_data.values()):
-        st.session_state.pop("analysis_result", None)
-        st.warning("Debe diligenciar al menos algunos campos antes de analizar el proceso.")
+    existe_informacion = any(
+        texto_diligenciado(valor)
+        for valor in datos_actuales.values()
+    )
+
+    if not existe_informacion:
+
+        st.session_state.ultimo_analisis = None
+
+        st.session_state.mensaje_validacion = (
+            "Debe diligenciar al menos algunos campos "
+            "antes de analizar el proceso."
+        )
+
     else:
-        completed = sum(bool(value) for value in current_data.values())
-        percentage = round((completed / len(FIELDS)) * 100)
-        missing = [FIELDS[key] for key, value in current_data.items() if not value]
-        st.session_state["analysis_result"] = {
-            "data": current_data,
-            "percentage": percentage,
-            "missing": missing,
+
+        porcentaje, pendientes = calcular_completitud(
+            datos_actuales
+        )
+
+        estado, mensaje_estado, color = (
+            determinar_semaforo(porcentaje)
+        )
+
+        # Se guarda una copia de los datos.
+        # Los cambios posteriores en el formulario no alteran
+        # el Word hasta que se vuelva a analizar.
+        st.session_state.ultimo_analisis = {
+            "datos": datos_actuales.copy(),
+            "porcentaje": porcentaje,
+            "pendientes": pendientes,
+            "estado": estado,
+            "mensaje_estado": mensaje_estado,
+            "color": color,
         }
 
-# El resultado permanece visible hasta volver a analizar o limpiar
-result = st.session_state.get("analysis_result")
-if result:
-    data = result["data"]
-    percentage = result["percentage"]
-    missing = result["missing"]
+        st.session_state.mensaje_validacion = ""
+
+
+if st.session_state.mensaje_validacion:
+    st.warning(
+        st.session_state.mensaje_validacion
+    )
+
+
+# ============================================================
+# PRESENTACIÓN DEL ÚLTIMO ANÁLISIS
+# ============================================================
+
+analisis = st.session_state.ultimo_analisis
+
+if analisis:
 
     st.divider()
-    st.subheader("2. Resultado del análisis")
-    st.metric("Completitud de la caracterización", f"{percentage} %")
-    st.progress(percentage)
-
-    # Semáforo según el nivel de completitud
-    if percentage >= 80:
-        traffic_class = "green"
-        traffic_text = "🟢 VERDE – Caracterización completa"
-    elif percentage >= 50:
-        traffic_class = "yellow"
-        traffic_text = "🟡 AMARILLO – Caracterización parcialmente completa"
-    else:
-        traffic_class = "red"
-        traffic_text = "🔴 ROJO – Caracterización incompleta"
 
     st.markdown(
-        f'<div class="traffic {traffic_class}">{traffic_text}</div>',
+        '<div class="section-title">'
+        '2. Resultado del análisis'
+        '</div>',
         unsafe_allow_html=True,
     )
 
-    if missing:
-        st.info("Campos pendientes por diligenciar:")
-        for field in missing:
-            st.markdown(f"- {field}")
+    columna_metrica, columna_progreso = st.columns(
+        [1, 2],
+        gap="large",
+    )
+
+    with columna_metrica:
+        st.metric(
+            "Completitud de la caracterización",
+            f"{analisis['porcentaje']} %",
+        )
+
+    with columna_progreso:
+        st.write("Progreso de diligenciamiento")
+
+        st.progress(
+            analisis["porcentaje"] / 100
+        )
+
+    st.info(
+        "El porcentaje refleja el nivel de diligenciamiento "
+        "de la ficha, pero no evalúa por sí solo la calidad "
+        "técnica de la información registrada."
+    )
+
+    st.markdown(
+        f"""
+        <div
+            class="status-card"
+            style="background-color: {analisis['color']};"
+        >
+            {analisis['estado']} |
+            {analisis['mensaje_estado']}
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    st.markdown(
+        "#### Campos pendientes por diligenciar"
+    )
+
+    if analisis["pendientes"]:
+        for campo in analisis["pendientes"]:
+            st.markdown(f"- {campo}")
     else:
-        st.success("Todos los campos fueron diligenciados.")
+        st.success(
+            "Todos los campos fueron diligenciados."
+        )
 
-    # Vista SIPOC en tarjetas. Los detalles del proceso combinan nombre y actividades.
-    st.subheader("3. Visualización SIPOC")
-    sipoc_items = [
-        ("PROVEEDOR", data["proveedor"]),
-        ("ENTRADA", data["entrada"]),
-        (
-            "PROCESO",
-            "\n\n".join(
-                part for part in [data["nombre_proceso"], data["actividades"]] if part
-            ),
-        ),
-        ("SALIDA", data["salida"]),
-        ("CLIENTE", data["cliente"]),
-    ]
+    # Visualización SIPOC
+    st.markdown(
+        '<div class="section-title">'
+        '3. Visualización SIPOC'
+        '</div>',
+        unsafe_allow_html=True,
+    )
 
-    # Alterna tarjetas y flechas para mostrar el flujo de izquierda a derecha.
-    sipoc_columns = st.columns([1, 0.16, 1, 0.16, 1, 0.16, 1, 0.16, 1])
-    column_index = 0
-    for item_index, (title, value) in enumerate(sipoc_items):
-        with sipoc_columns[column_index]:
-            st.markdown(
-                f'<div class="sipoc-card"><div class="sipoc-title">{title}</div>'
-                f'<div class="field-value">{safe_text(value)}</div></div>',
-                unsafe_allow_html=True,
+    mostrar_sipoc(
+        analisis["datos"]
+    )
+
+    # Resumen completo
+    st.markdown(
+        '<div class="section-title">'
+        '4. Resumen de la caracterización'
+        '</div>',
+        unsafe_allow_html=True,
+    )
+
+    datos_analizados = analisis["datos"]
+    elementos_resumen = list(CAMPOS.items())
+
+    columna_resumen_1, columna_resumen_2 = st.columns(
+        2,
+        gap="large",
+    )
+
+    with columna_resumen_1:
+        for clave, etiqueta in elementos_resumen[:6]:
+            mostrar_tarjeta(
+                etiqueta,
+                datos_analizados[clave],
             )
-        column_index += 1
-        if item_index < len(sipoc_items) - 1:
-            with sipoc_columns[column_index]:
-                st.markdown('<div class="arrow">→</div>', unsafe_allow_html=True)
-            column_index += 1
 
-    # Ficha resumen
-    st.subheader("4. Resumen de la caracterización")
-    summary_columns = st.columns(2)
-    for index, (key, label) in enumerate(FIELDS.items()):
-        with summary_columns[index % 2]:
-            show_field(label, data[key])
+    with columna_resumen_2:
+        for clave, etiqueta in elementos_resumen[6:]:
+            mostrar_tarjeta(
+                etiqueta,
+                datos_analizados[clave],
+            )
 
-    st.caption(
-        "El porcentaje indica cuántos campos fueron diligenciados. "
-        "No evalúa por sí solo la calidad técnica del contenido."
+    columna_analisis_1, columna_analisis_2 = st.columns(
+        2,
+        gap="large",
+    )
+
+    with columna_analisis_1:
+
+        mostrar_tarjeta(
+            "Porcentaje de completitud",
+            f"{analisis['porcentaje']} %",
+        )
+
+        mostrar_tarjeta(
+            "Estado del semáforo",
+            (
+                f"{analisis['estado']} | "
+                f"{analisis['mensaje_estado']}"
+            ),
+        )
+
+    with columna_analisis_2:
+
+        if analisis["pendientes"]:
+            texto_pendientes = "\n".join(
+                f"• {campo}"
+                for campo in analisis["pendientes"]
+            )
+        else:
+            texto_pendientes = (
+                "Todos los campos fueron diligenciados."
+            )
+
+        mostrar_tarjeta(
+            "Campos pendientes por diligenciar",
+            texto_pendientes,
+        )
+
+    # Descarga del Word
+    st.markdown(
+        '<div class="section-title">'
+        '5. Descargar documento'
+        '</div>',
+        unsafe_allow_html=True,
+    )
+
+    archivo_word = generar_documento_word(
+        analisis
+    )
+
+    nombre_archivo = limpiar_nombre_archivo(
+        datos_analizados["nombre_proceso"]
+    )
+
+    st.download_button(
+        label="Descargar caracterización en Word",
+        data=archivo_word,
+        file_name=nombre_archivo,
+        mime=(
+            "application/vnd.openxmlformats-officedocument."
+            "wordprocessingml.document"
+        ),
+        use_container_width=True,
     )
